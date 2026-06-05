@@ -1,0 +1,119 @@
+version: '3.8'
+
+services:
+  # Main API Service
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: brain-tumor-api
+    ports:
+      - "5000:5000"
+    environment:
+      - PYTHONUNBUFFERED=1
+      - LOG_LEVEL=INFO
+      - MODEL_PATH=/app/models/best_model.pth
+    volumes:
+      - ./models:/app/models
+      - ./configs:/app/configs
+      - ./data:/app/data
+      - ./results:/app/results
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+    networks:
+      - brain-tumor-network
+
+  # Jupyter Notebook Service
+  notebook:
+    image: jupyter/pytorch-notebook:latest
+    container_name: brain-tumor-notebook
+    ports:
+      - "8888:8888"
+    environment:
+      - JUPYTER_ENABLE_LAB=yes
+    volumes:
+      - ./notebooks:/home/jovyan/work/notebooks
+      - ./models:/home/jovyan/work/models
+      - ./data:/home/jovyan/work/data
+      - ./configs:/home/jovyan/work/configs
+      - ./src:/home/jovyan/work/src
+    command: start-notebook.sh --NotebookApp.token='' --NotebookApp.password=''
+    networks:
+      - brain-tumor-network
+    depends_on:
+      - api
+
+  # Prometheus for Metrics
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: brain-tumor-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus-data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+    networks:
+      - brain-tumor-network
+    depends_on:
+      - api
+
+  # Grafana for Dashboards
+  grafana:
+    image: grafana/grafana:latest
+    container_name: brain-tumor-grafana
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_INSTALL_PLUGINS=grafana-piechart-panel
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./monitoring/grafana/dashboards:/etc/grafana/provisioning/dashboards
+      - ./monitoring/grafana/datasources:/etc/grafana/provisioning/datasources
+    networks:
+      - brain-tumor-network
+    depends_on:
+      - prometheus
+
+  # PostgreSQL for Predictions Log (optional)
+  postgres:
+    image: postgres:15-alpine
+    container_name: brain-tumor-postgres
+    environment:
+      - POSTGRES_USER=btc_user
+      - POSTGRES_PASSWORD=btc_password
+      - POSTGRES_DB=brain_tumor_db
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks:
+      - brain-tumor-network
+    ports:
+      - "5432:5432"
+
+  # Redis for Caching (optional)
+  redis:
+    image: redis:7-alpine
+    container_name: brain-tumor-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    networks:
+      - brain-tumor-network
+
+networks:
+  brain-tumor-network:
+    driver: bridge
+
+volumes:
+  prometheus-data:
+  grafana-data:
+  postgres-data:
+  redis-data:

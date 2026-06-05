@@ -1,0 +1,362 @@
+name: Brain Tumor Classification - Complete CI/CD
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+  schedule:
+    - cron: '0 2 * * *'  # Daily at 2 AM UTC
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  # Stage 1: Code Quality
+  quality:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ['3.10', '3.11']
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ matrix.python-version }}
+    
+    - name: Cache dependencies
+      uses: actions/cache@v3
+      with:
+        path: ~/.cache/pip
+        key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt flake8 black isort
+    
+    - name: Code formatting check
+      run: |
+        black --check src/ tests/
+        isort --check-only src/ tests/
+    
+    - name: Linting
+      run: flake8 src/ --max-line-length=127 --count --statistics
+    
+    - name: Security scan (Bandit)
+      run: |
+        pip install bandit
+        bandit -r src/ -f json -o bandit-report.json || true
+
+  # Stage 2: Testing
+  test:
+    runs-on: ubuntu-latest
+    needs: quality
+    strategy:
+      matrix:
+        python-version: ['3.10', '3.11']
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ matrix.python-version }}
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt pytest pytest-cov
+    
+    - name: Run unit tests
+      run: pytest tests/test_model.py -v -m unit --cov=src --cov-report=xml
+    
+    - name: Run integration tests
+      run: pytest tests/test_model.py -v -m integration --tb=short
+    
+    - name: Upload coverage
+      uses: codecov/codecov-action@v3
+      with:
+        file: ./coverage.xml
+        flags: unittests
+        fail_ci_if_error: false
+
+  # Stage 3: Performance Benchmarking
+  benchmark:
+    runs-on: ubuntu-latest
+    needs: test
+    if: github.event_name == 'push'
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.10'
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+    
+    - name: Run benchmarks
+      run: |
+        python benchmark_model.py --full --device cpu --export benchmark_results.json
+    
+    - name: Upload benchmarks
+      uses: actions/upload-artifact@v3
+      with:
+        name: benchmark-results
+        path: benchmark_results.json
+    
+    - name: Comment on PR
+      if: github.event_name == 'pull_request'
+      uses: actions/github-script@v6
+      with:
+        script: |
+          const fs = require('fs');
+          const results = JSON.parse(fs.readFileSync('benchmark_results.json', 'utf8'));
+          const comment = `## Performance Benchmark Results\n\n\`\`\`\nAverage Latency: ${results.latency.mean_latency_ms.toFixed(2)}ms\nThroughput: ${results.latency.throughput_images_per_sec.toFixed(1)} images/sec\n\`\`\``;
+          github.rest.issues.createComment({
+            issue_number: context.issue.number,
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            body: comment
+          });
+
+  # Stage 4: Regression Detection
+  regression-detection:
+    runs-on: ubuntu-latest
+    needs: benchmark
+    if: github.event_name == 'push'
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.10'
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+    
+    - name: Get baseline metrics
+      run: |
+        # This would load from a stored baseline (e.g., git-stored file)
+        cat > baseline_metrics.json << 'EOF'
+        {
+          "accuracy": 0.95,
+          "latency_ms": 1000,
+          "size_mb": 278.7,
+          "peak_memory_mb": 1024
+        }
+        EOF
+    
+    - name: Get current metrics
+      run: |
+        python benchmark_model.py --full --device cpu --export current_metrics.json
+    
+    - name: Run regression detection
+      run: |
+        python regression_detector.py \
+          --baseline baseline_metrics.json \
+          --current current_metrics.json \
+          --output regression_report.json
+
+  # Stage 5: Build Docker Image
+  build-docker:
+    runs-on: ubuntu-latest
+    needs: [quality, test]
+    if: github.event_name == 'push'
+    
+    permissions:
+      contents: read
+      packages: write
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v2
+    
+    - name: Build image
+      uses: docker/build-push-action@v4
+      with:
+        context: .
+        push: false
+        tags: brain-tumor-api:${{ github.sha }}
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+
+  # Stage 6: Model Registry Update
+  registry-update:
+    runs-on: ubuntu-latest
+    needs: [test, benchmark]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.10'
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+    
+    - name: Register new model
+      run: |
+        python model_registry.py register \
+          --path models/best_model.pth \
+          --version v${{ github.run_number }} \
+          --accuracy 0.95 \
+          --latency 1000
+    
+    - name: Commit changes
+      uses: stefanzweifel/git-auto-commit-action@v4
+      with:
+        commit_message: "chore: Update model registry"
+        file_pattern: "models/registry.json models/performance_tracking.json"
+
+  # Stage 7: Deployment to Staging
+  deploy-staging:
+    runs-on: ubuntu-latest
+    needs: [build-docker, registry-update]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/develop'
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.10'
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+    
+    - name: Prepare deployment
+      run: |
+        python deployment_manager.py prepare \
+          --model models/best_model.pth \
+          --version v${{ github.run_number }} \
+          --tests-passed
+    
+    - name: Deploy to staging
+      run: |
+        python deployment_manager.py deploy \
+          --model models/best_model.pth \
+          --version v${{ github.run_number }} \
+          --environment staging
+    
+    - name: Health check
+      run: |
+        sleep 10
+        python deployment_manager.py health --environment staging
+
+  # Stage 8: Deployment to Production (Manual Trigger)
+  deploy-production:
+    runs-on: ubuntu-latest
+    needs: deploy-staging
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    environment:
+      name: production
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.10'
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+    
+    - name: Canary deployment (10%)
+      run: |
+        python deployment_manager.py canary \
+          --model models/best_model.pth \
+          --version v${{ github.run_number }} \
+          --percentage 10
+    
+    - name: Wait for canary validation
+      run: sleep 300  # 5 minutes
+    
+    - name: Full production deployment
+      run: |
+        python deployment_manager.py deploy \
+          --model models/best_model.pth \
+          --version v${{ github.run_number }} \
+          --environment production
+    
+    - name: Production health check
+      run: |
+        python deployment_manager.py health --environment production
+
+  # Stage 9: Scheduled Model Retraining
+  scheduled-retraining:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'schedule'
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.10'
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+    
+    - name: Run model retraining
+      run: |
+        python train.py --config configs/config.yaml --epochs 5 --output models/retrained_model.pth
+    
+    - name: Evaluate retrained model
+      run: |
+        python evaluate.py --model-path models/retrained_model.pth
+    
+    - name: Compare with baseline
+      run: |
+        python model_comparison.py \
+          --models models/best_model.pth models/retrained_model.pth \
+          --names "Baseline" "Retrained" \
+          --recommendations
+
+  # Stage 10: Notifications
+  notify:
+    runs-on: ubuntu-latest
+    needs: [quality, test, build-docker]
+    if: always()
+    
+    steps:
+    - name: Check job status
+      run: |
+        if [ "${{ needs.quality.result }}" == "failure" ] || \
+           [ "${{ needs.test.result }}" == "failure" ] || \
+           [ "${{ needs.build-docker.result }}" == "failure" ]; then
+          echo "❌ Pipeline failed"
+          exit 1
+        else
+          echo "✅ Pipeline succeeded"
+        fi

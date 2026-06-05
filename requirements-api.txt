@@ -1,0 +1,209 @@
+## Additional Dependencies for API and Notebook
+
+# Web Framework
+flask>=2.3.0
+flask-cors>=4.0.0
+
+# Jupyter Notebook
+notebook>=6.5.0
+ipywidgets>=8.0.0
+
+# Image Processing (already in main requirements)
+# pillow>=10.0.0
+# opencv-python>=4.8.0
+
+# Optional: Production Server
+gunicorn>=20.1.0
+waitress>=2.1.0
+
+## Installation
+
+```bash
+# Install web framework
+pip install flask flask-cors
+
+# Install notebook
+pip install notebook ipywidgets
+
+# Production server (recommended for deployment)
+pip install gunicorn
+
+# Or use:
+pip install waitress
+```
+
+## Deployment Commands
+
+### Development Server
+```bash
+python api.py
+```
+
+### Production Server (Gunicorn)
+```bash
+gunicorn -w 4 -b 0.0.0.0:5000 api:app
+```
+
+### Production Server (Waitress)
+```bash
+waitress-serve --port=5000 api:app
+```
+
+## Docker Production Setup
+
+```dockerfile
+FROM python:3.10-slim
+
+WORKDIR /app
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    libsm6 libxext6 libxrender-dev && \
+    rm -rf /var/lib/apt/lists/*
+
+# Install Python dependencies
+COPY requirements.txt requirements-api.txt ./
+RUN pip install --no-cache-dir -r requirements.txt && \
+    pip install --no-cache-dir -r requirements-api.txt
+
+# Copy application
+COPY . .
+
+# Expose port
+EXPOSE 5000
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
+    CMD curl -f http://localhost:5000/health || exit 1
+
+# Run production server
+CMD ["gunicorn", "-w", "4", "-b", "0.0.0.0:5000", "--timeout", "120", "api:app"]
+```
+
+## API Testing
+
+### Using cURL
+
+```bash
+# Health check
+curl http://localhost:5000/health
+
+# Get classes
+curl http://localhost:5000/classes
+
+# Predict on image
+curl -X POST -F "image=@test.jpg" http://localhost:5000/predict
+
+# Explain prediction
+curl -X POST -F "image=@test.jpg" http://localhost:5000/explain
+
+# Batch prediction
+curl -X POST -F "images=@img1.jpg" -F "images=@img2.jpg" \
+  http://localhost:5000/batch-predict
+```
+
+### Using Python
+
+```python
+import requests
+import json
+
+BASE_URL = 'http://localhost:5000'
+
+# Health check
+response = requests.get(f'{BASE_URL}/health')
+print(response.json())
+
+# Single prediction
+with open('test.jpg', 'rb') as f:
+    files = {'image': f}
+    response = requests.post(f'{BASE_URL}/predict', files=files)
+    print(json.dumps(response.json(), indent=2))
+
+# Batch prediction
+with open('img1.jpg', 'rb') as f1, open('img2.jpg', 'rb') as f2:
+    files = {'images': [('img1.jpg', f1), ('img2.jpg', f2)]}
+    response = requests.post(f'{BASE_URL}/batch-predict', files=files)
+    print(json.dumps(response.json(), indent=2))
+```
+
+### Using JavaScript/Fetch
+
+```javascript
+// Single prediction
+const formData = new FormData();
+formData.append('image', fileInput.files[0]);
+
+fetch('http://localhost:5000/predict', {
+    method: 'POST',
+    body: formData
+})
+.then(response => response.json())
+.then(data => console.log(data))
+.catch(error => console.error('Error:', error));
+
+// Get classes
+fetch('http://localhost:5000/classes')
+    .then(response => response.json())
+    .then(data => console.log(data.classes));
+```
+
+## Performance Tuning
+
+### API Configuration
+
+```python
+# In api.py for production
+app.config.update(
+    JSON_SORT_KEYS=False,
+    JSONIFY_PRETTYPRINT_REGULAR=False,
+    PROPAGATE_EXCEPTIONS=True
+)
+
+# Gunicorn workers = 2 * CPU_COUNT + 1
+# For 4-core machine: 9 workers
+gunicorn -w 9 -b 0.0.0.0:5000 api:app
+```
+
+### Load Testing
+
+```bash
+# Install Apache Bench
+# Ubuntu: sudo apt-get install apache2-utils
+# macOS: brew install httpd
+
+# Test 100 requests with 10 concurrent
+ab -n 100 -c 10 http://localhost:5000/health
+
+# Or use wrk
+# wrk -t4 -c100 -d30s http://localhost:5000/health
+```
+
+## Monitoring and Logging
+
+### Enable Logging
+
+```python
+import logging
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler('api.log'),
+        logging.StreamHandler()
+    ]
+)
+```
+
+### Docker Logs
+
+```bash
+docker run -p 5000:5000 brain-tumor-api:latest
+docker logs <container_id>
+docker logs -f <container_id>  # Follow logs
+```
+
+---
+
+**For production deployment, always use a production WSGI server like Gunicorn or Waitress.**
