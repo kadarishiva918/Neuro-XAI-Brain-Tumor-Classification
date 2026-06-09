@@ -1,0 +1,10 @@
+backend/venv/
+backend/__pycache__/
+backend/uploads/
+backend/BrainTumorDataset/
+backend/dataset/
+Brain_Tumor_Classification/
+*.pyc
+*.pth
+frontend/node_modules/
+.env

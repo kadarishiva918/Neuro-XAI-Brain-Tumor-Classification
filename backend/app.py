@@ -19,6 +19,7 @@ from flask_cors import CORS
 from PIL import Image
 
 import tensorflow as tf
+from tensorflow.keras.applications.efficientnet import preprocess_input
 
 from labels import (
     CLASS_FOLDERS,
@@ -33,8 +34,9 @@ np.random.seed(42)
 random.seed(42)
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-MODEL_PATH = os.path.join(BASE_DIR, "models", "brain_tumor_model.h5")
-CLASS_INDICES_PATH = os.path.join(BASE_DIR, "models", "class_indices.json")
+MODELS_DIR = os.path.join(BASE_DIR, "models")
+MODEL_PATH = os.path.join(MODELS_DIR, "brain_tumor_model.h5")
+CLASS_INDICES_PATH = os.path.join(MODELS_DIR, "class_indices.json")
 UPLOADS_DIR = os.path.join(BASE_DIR, "uploads")
 IMAGE_SIZE = (224, 224)
 
@@ -109,10 +111,11 @@ def index_to_folder(idx: int) -> str:
 
 
 def preprocess_image(file_obj) -> np.ndarray:
-    """Must match training: RGB, LANCZOS resize, /255.0, batch dim."""
+    """Must match training: RGB, LANCZOS resize, EfficientNet preprocess_input."""
     img = Image.open(file_obj).convert("RGB")
     img = img.resize(IMAGE_SIZE, Image.LANCZOS)
-    img_array = np.array(img, dtype=np.float32) / 255.0
+    img_array = np.array(img, dtype=np.float32)
+    img_array = preprocess_input(img_array)
     img_array = np.expand_dims(img_array, axis=0)
     assert img_array.shape == (1, 224, 224, 3), f"Bad shape: {img_array.shape}"
     return img_array
