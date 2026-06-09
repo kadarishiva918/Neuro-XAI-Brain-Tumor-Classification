@@ -14,11 +14,13 @@ import {
 import { RecentScansTable } from "@/components/dashboard/recent-scans-table";
 import { getGreeting } from "@/lib/utils";
 import { checkHealth } from "@/lib/api";
+import { useAuth } from "@/context/auth-context";
 
 const spark = (base: number) =>
   Array.from({ length: 8 }, (_, i) => ({ v: base + Math.sin(i) * 5 }));
 
 export default function DashboardPage() {
+  const { user } = useAuth();
   const { data: health } = useQuery({
     queryKey: ["health"],
     queryFn: checkHealth,
@@ -43,7 +45,7 @@ export default function DashboardPage() {
     <PageTransition>
       <header className="relative mb-8 overflow-hidden rounded-2xl border border-border bg-bg-card p-6 backdrop-blur-glass">
         <h1 className="font-display text-2xl font-bold tracking-tight md:text-3xl">
-          {getGreeting()}, Doctor 👋
+          {getGreeting()}{user?.name ? `, ${user.name.split(" ").slice(-1)[0]}` : ""} 👋
         </h1>
         <p className="mt-1 text-text-muted">
           Here&apos;s your diagnostic overview for today

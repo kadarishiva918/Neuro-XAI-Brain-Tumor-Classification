@@ -9,9 +9,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const [mobileOpen, setMobileOpen] = useState(false);
 
   return (
-    <div className="gradient-mesh grid-overlay min-h-screen">
+    <div className="gradient-mesh grid-overlay min-h-screen bg-[#050b1a]">
       <Sidebar mobileOpen={mobileOpen} onMobileClose={() => setMobileOpen(false)} />
-      <div className="lg:pl-[280px]">
+      <div className="min-h-screen lg:pl-[260px]">
         <Navbar onMenuClick={() => setMobileOpen(true)} />
         <main className="relative min-h-[calc(100vh-4rem)] px-4 pb-20 pt-6 lg:px-8 lg:pb-8">
           <ParticleField count={16} />

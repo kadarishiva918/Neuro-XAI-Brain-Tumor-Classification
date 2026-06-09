@@ -17,8 +17,10 @@ import {
   Sparkles,
 } from "lucide-react";
 import { useState } from "react";
+import { LogOut } from "lucide-react";
 import { useTheme } from "next-themes";
 import { NeuroLogo } from "@/components/ui/logo";
+import { useAuth } from "@/context/auth-context";
 import { cn } from "@/lib/utils";
 
 type NavItem =
@@ -54,9 +56,8 @@ interface SidebarProps {
 export function Sidebar({ mobileOpen, onMobileClose }: SidebarProps) {
   const pathname = usePathname();
   const { theme, setTheme } = useTheme();
-  const [xaiOpen, setXaiOpen] = useState(
-    pathname.startsWith("/explainability")
-  );
+  const { user, logout } = useAuth();
+  const [xaiOpen, setXaiOpen] = useState(pathname.startsWith("/explainability"));
 
   const isActive = (href: string) =>
     href === "/" ? pathname === "/" : pathname.startsWith(href);
@@ -81,36 +82,29 @@ export function Sidebar({ mobileOpen, onMobileClose }: SidebarProps) {
           "group relative flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-all duration-200",
           nested && "pl-9 text-xs",
           active
-            ? "neon-border-active text-text-primary"
-            : "text-text-muted hover:bg-accent-blue/5 hover:text-text-primary"
+            ? "neon-border-active text-[#e8f0ff]"
+            : "text-[#6b7fa3] hover:bg-[rgba(76,201,240,0.08)] hover:text-[#e8f0ff]"
         )}
       >
         <Icon
           className={cn(
             "h-4 w-4 shrink-0 transition-all",
-            active ? "text-accent-cyan drop-shadow-[0_0_8px_rgba(0,212,255,0.6)]" : "group-hover:text-accent-blue"
+            active ? "text-[#00d4ff]" : "group-hover:text-[#4cc9f0]"
           )}
         />
         <span className="truncate">{label}</span>
-        {active && (
-          <motion.div
-            layoutId="sidebar-active"
-            className="absolute inset-0 -z-10 rounded-lg"
-            transition={{ type: "spring", stiffness: 380, damping: 30 }}
-          />
-        )}
       </Link>
     );
   };
 
   const sidebarContent = (
     <>
-      <div className="border-b border-border px-4 py-5">
-        <Link href="/" className="block">
+      <div className="border-b border-[rgba(76,201,240,0.12)] px-4 py-5">
+        <Link href="/" className="block" onClick={onMobileClose}>
           <NeuroLogo />
         </Link>
-        <p className="mt-2 text-[11px] italic text-text-muted">
-          Precision Diagnostics. Explainable Intelligence.
+        <p className="mt-2 text-[10px] font-semibold uppercase tracking-[0.2em] text-[#6b7fa3]">
+          Precision Diagnostics
         </p>
       </div>
 
@@ -124,11 +118,13 @@ export function Sidebar({ mobileOpen, onMobileClose }: SidebarProps) {
                   type="button"
                   onClick={() => setXaiOpen(!xaiOpen)}
                   className={cn(
-                    "flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium text-text-muted transition-all hover:bg-accent-blue/5 hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-blue",
-                    open && "text-text-primary"
+                    "flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-all",
+                    "text-[#6b7fa3] hover:bg-[rgba(76,201,240,0.08)] hover:text-[#e8f0ff]",
+                    "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#4cc9f0]",
+                    open && "text-[#e8f0ff]"
                   )}
                 >
-                  <item.icon className="h-4 w-4" />
+                  <item.icon className="h-4 w-4 shrink-0" />
                   <span className="flex-1 text-left">{item.label}</span>
                   <ChevronDown
                     className={cn("h-4 w-4 transition-transform", open && "rotate-180")}
@@ -142,7 +138,7 @@ export function Sidebar({ mobileOpen, onMobileClose }: SidebarProps) {
                       exit={{ height: 0, opacity: 0 }}
                       className="overflow-hidden"
                     >
-                      <div className="mt-1 space-y-0.5 border-l border-border/50 ml-5 pl-2">
+                      <div className="ml-5 mt-1 space-y-0.5 border-l border-[rgba(76,201,240,0.12)] pl-2">
                         {item.children.map((child) => (
                           <NavLink
                             key={child.href}
@@ -171,12 +167,31 @@ export function Sidebar({ mobileOpen, onMobileClose }: SidebarProps) {
         })}
       </nav>
 
-      <div className="border-t border-border space-y-1 px-3 py-4">
+      <div className="space-y-1 border-t border-[rgba(76,201,240,0.12)] px-3 py-4">
+        {user && (
+          <div className="mb-3 flex items-center gap-3 rounded-lg bg-[rgba(76,201,240,0.06)] px-3 py-2.5">
+            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-[#4cc9f0] to-[#7b61ff] text-xs font-bold text-[#050b1a]">
+              {user.initials}
+            </div>
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-sm font-medium text-[#e8f0ff]">{user.name}</p>
+              <p className="truncate text-xs text-[#6b7fa3]">{user.specialization}</p>
+            </div>
+            <button
+              type="button"
+              onClick={logout}
+              className="shrink-0 rounded p-1.5 text-[#6b7fa3] hover:bg-[rgba(255,77,109,0.15)] hover:text-[#ff4d6d]"
+              title="Logout"
+            >
+              <LogOut className="h-4 w-4" />
+            </button>
+          </div>
+        )}
         <NavLink href="/settings" label="Settings" icon={Settings} />
         <button
           type="button"
           onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
-          className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium text-text-muted transition-all hover:bg-accent-blue/5 hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-blue"
+          className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium text-[#6b7fa3] transition-all hover:bg-[rgba(76,201,240,0.08)] hover:text-[#e8f0ff] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#4cc9f0]"
         >
           <span className="text-base">{theme === "dark" ? "🌙" : "☀️"}</span>
           <span>{theme === "dark" ? "Dark Mode" : "Light Mode"}</span>
@@ -185,14 +200,13 @@ export function Sidebar({ mobileOpen, onMobileClose }: SidebarProps) {
     </>
   );
 
+  const sidebarClass =
+    "sidebar-shell fixed top-0 z-40 flex h-screen w-[260px] flex-col bg-[#0d1117]";
+
   return (
     <>
-      {/* Desktop */}
-      <aside className="fixed left-0 top-0 z-40 hidden h-screen w-[280px] flex-col border-r border-border bg-bg-card backdrop-blur-glass lg:flex">
-        {sidebarContent}
-      </aside>
+      <aside className={cn(sidebarClass, "hidden lg:flex")}>{sidebarContent}</aside>
 
-      {/* Mobile overlay */}
       <AnimatePresence>
         {mobileOpen && (
           <>
@@ -204,10 +218,10 @@ export function Sidebar({ mobileOpen, onMobileClose }: SidebarProps) {
               onClick={onMobileClose}
             />
             <motion.aside
-              initial={{ x: -280 }}
+              initial={{ x: -260 }}
               animate={{ x: 0 }}
-              exit={{ x: -280 }}
-              className="fixed left-0 top-0 z-50 flex h-screen w-[280px] flex-col border-r border-border bg-bg-card lg:hidden"
+              exit={{ x: -260 }}
+              className={cn(sidebarClass, "lg:hidden")}
             >
               {sidebarContent}
             </motion.aside>
@@ -215,8 +229,7 @@ export function Sidebar({ mobileOpen, onMobileClose }: SidebarProps) {
         )}
       </AnimatePresence>
 
-      {/* Mobile icon bar */}
-      <aside className="fixed bottom-0 left-0 right-0 z-30 flex h-14 items-center justify-around border-t border-border bg-bg-card backdrop-blur-glass lg:hidden">
+      <aside className="fixed bottom-0 left-0 right-0 z-30 flex h-14 items-center justify-around border-t border-[rgba(76,201,240,0.12)] bg-[#0d1117] lg:hidden">
         {navItems.slice(0, 5).map((item) => {
           const href = "href" in item ? item.href : "/explainability/grad-cam";
           const Icon = item.icon;
@@ -227,7 +240,7 @@ export function Sidebar({ mobileOpen, onMobileClose }: SidebarProps) {
               href={href}
               className={cn(
                 "flex flex-col items-center p-2 text-[10px]",
-                active ? "text-accent-cyan" : "text-text-muted"
+                active ? "text-[#00d4ff]" : "text-[#6b7fa3]"
               )}
             >
               <Icon className="h-5 w-5" />

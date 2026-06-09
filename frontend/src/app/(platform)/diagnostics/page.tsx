@@ -13,8 +13,9 @@ import {
 import { ClassificationStep } from "@/components/diagnostics/steps/classification-step";
 import { XAIStep, ReportStep } from "@/components/diagnostics/steps/xai-report-steps";
 import { useDiagnostic } from "@/context/diagnostic-context";
-import { explainImage } from "@/lib/api";
+import { API_URL, predictImage } from "@/lib/api";
 import { saveHistoryEntry } from "@/lib/history-store";
+import { formatConfidencePercent } from "@/lib/prediction-utils";
 import { getSeverity } from "@/lib/utils";
 import type { DisplayLabel } from "@/types";
 
@@ -26,20 +27,20 @@ export default function DiagnosticsPage() {
     setPrediction,
     setHeatmap,
     patientId,
+    resetSession,
   } = useDiagnostic();
   const [, setAnalyzing] = useState(false);
 
   const runAnalysis = useCallback(async () => {
     if (!file) return;
     setAnalyzing(true);
-    setCurrentStep(2);
     try {
-      const result = await explainImage(file);
+      const result = await predictImage(file);
       setPrediction(result);
-      setHeatmap(result.heatmap);
+      setHeatmap(null);
       const label = result.predicted_label ?? result.tumor_type ?? "Unknown";
       toast.success(
-        `Analysis complete — ${label} (${(result.confidence * 100).toFixed(1)}%)`
+        `Analysis complete — ${label} (${formatConfidencePercent(result.confidence)})`
       );
       saveHistoryEntry({
         id: crypto.randomUUID(),
@@ -48,12 +49,16 @@ export default function DiagnosticsPage() {
         tumorType: label as DisplayLabel,
         confidence: result.confidence,
         severity: getSeverity(label as DisplayLabel),
-        heatmap: result.heatmap ?? undefined,
+        heatmap: undefined,
         probabilities: result.probabilities,
       });
+      setCurrentStep(2);
     } catch (err) {
       console.error(err);
-      toast.error("Analysis failed — ensure Flask API is running on http://localhost:5000");
+      const message = err instanceof Error ? err.message : "Unknown error";
+      toast.error(`Analysis failed — ${message}`);
+      console.error(`Check Flask API at ${API_URL} (proxied via /api)`);
+      setCurrentStep(1);
     } finally {
       setAnalyzing(false);
     }
@@ -65,9 +70,20 @@ export default function DiagnosticsPage() {
 
   return (
     <PageTransition>
-      <header className="mb-6">
-        <h1 className="font-display text-2xl font-bold">MRI Diagnostics</h1>
-        <p className="text-text-muted">7-step clinical analysis pipeline</p>
+      <header className="mb-6 flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h1 className="font-display text-2xl font-bold">MRI Diagnostics</h1>
+          <p className="text-text-muted">7-step clinical analysis pipeline</p>
+        </div>
+        {currentStep > 1 && (
+          <button
+            type="button"
+            onClick={resetSession}
+            className="text-sm font-medium text-accent-cyan hover:text-accent-blue"
+          >
+            ← New Scan
+          </button>
+        )}
       </header>
 
       <StepIndicator current={currentStep} />

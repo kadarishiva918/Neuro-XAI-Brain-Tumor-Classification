@@ -2,15 +2,41 @@
 
 import { motion } from "framer-motion";
 
-export function NeuroLogo({ collapsed = false }: { collapsed?: boolean }) {
+interface NeuroLogoProps {
+  collapsed?: boolean;
+  size?: "sm" | "md" | "lg";
+  showTagline?: boolean;
+}
+
+const sizes = {
+  sm: { box: 32, svg: 32 },
+  md: { box: 40, svg: 40 },
+  lg: { box: 96, svg: 96 },
+};
+
+export function NeuroLogo({
+  collapsed = false,
+  size = "md",
+  showTagline = true,
+}: NeuroLogoProps) {
+  const dim = sizes[size];
+
   return (
     <div className="flex items-center gap-3">
       <motion.div
-        className="relative flex h-10 w-10 shrink-0 items-center justify-center"
+        className="relative flex shrink-0 items-center justify-center"
+        style={{ width: dim.box, height: dim.box, maxWidth: 120, maxHeight: 120 }}
         animate={{ scale: [1, 1.05, 1] }}
         transition={{ duration: 2, repeat: Infinity, ease: "easeInOut" }}
       >
-        <svg viewBox="0 0 48 48" className="h-10 w-10" aria-hidden>
+        <svg
+          viewBox="0 0 48 48"
+          width={dim.svg}
+          height={dim.svg}
+          className="block"
+          style={{ width: dim.svg, height: dim.svg, maxWidth: "100%", maxHeight: "100%" }}
+          aria-hidden
+        >
           <defs>
             <linearGradient id="brainGrad" x1="0%" y1="0%" x2="100%" y2="100%">
               <stop offset="0%" stopColor="#4CC9F0" />
@@ -53,7 +79,7 @@ export function NeuroLogo({ collapsed = false }: { collapsed?: boolean }) {
           />
         </svg>
       </motion.div>
-      {!collapsed && (
+      {!collapsed && showTagline && size !== "lg" && (
         <div className="min-w-0">
           <p className="font-display text-lg font-bold tracking-tight text-text-primary">
             Neuro-XAI

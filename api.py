@@ -14,7 +14,6 @@ from flask import Flask, request, jsonify
 from flask_cors import CORS
 from werkzeug.utils import secure_filename
 
-# Add src to path
 ROOT = Path(__file__).parent
 sys.path.insert(0, str(ROOT / "src"))
 
@@ -29,11 +28,10 @@ except ImportError as exc:
     print(f"[WARN] PyTorch/model imports unavailable: {exc}")
     TORCH_AVAILABLE = False
 
-# ── Class definitions ─────────────────────────────────────────────────────────
-# Training folder / index order (see TESTING_GUIDE.md & ImageDataGenerator sort)
+# Alphabetical training folder order (Keras ImageDataGenerator / flow_from_directory)
+MODEL_CLASS_FOLDERS = ["glioma", "meningioma", "no_tumor", "pituitary"]
 MODEL_CLASS_NAMES = ["Glioma", "Meningioma", "No Tumor", "Pituitary"]
 
-# All 8 tumor types shown in the UI (model trained on 4; others padded with 0)
 ALL_TUMOR_TYPES = [
     "Glioma",
     "Meningioma",
@@ -45,21 +43,42 @@ ALL_TUMOR_TYPES = [
     "Metastatic (Secondary) Tumor",
 ]
 
-MODEL_TO_UI = {
+# Map model class index → UI probability keys
+MODEL_INDEX_TO_UI = {
+    0: "Glioma",
+    1: "Meningioma",
+    2: "No Tumor",
+    3: "Pituitary Adenoma",
+}
+
+MODEL_TO_UI_LABEL = {
     "Glioma": "Glioma",
     "Meningioma": "Meningioma",
+    "No Tumor": "No Tumor Detected",
     "Pituitary": "Pituitary Adenoma",
 }
 
+SEVERITY_MAP = {
+    "Glioma": "High",
+    "Meningioma": "Medium",
+    "No Tumor": "Low",
+    "Pituitary": "Low-Medium",
+    "No Tumor Detected": "Low",
+    "Unclassified/Rare Tumor": "High",
+}
+
 UNCLASSIFIED_LABEL = "Unclassified/Rare Tumor"
-CONFIDENCE_THRESHOLD = 0.70
+CONFIDENCE_UNCLASSIFIED_PCT = 40.0   # below → unclassified
+CONFIDENCE_WARNING_PCT = 70.0      # 40–70 → low-confidence warning
 
 RARE_TUMOR_MESSAGE = (
     "This scan may show a tumor type not in the training set "
     "(e.g. Medulloblastoma, Ependymoma). Please refer to a specialist."
 )
+LOW_CONFIDENCE_MESSAGE = (
+    "Low confidence prediction — consult specialist for confirmation."
+)
 
-# ── App config ────────────────────────────────────────────────────────────────
 MODEL_PATH = ROOT / "models" / "best_model.pth"
 CONFIG_PATH = ROOT / "configs" / "config.yaml"
 UPLOAD_FOLDER = ROOT / "uploads"
@@ -78,29 +97,46 @@ config = None
 device = None
 model_loaded = False
 model_load_error = None
+image_size = 224
 
 
 def allowed_file(filename: str) -> bool:
     return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXTENSIONS
 
 
+def get_upload_file():
+    """Accept image under 'image' or 'file' field name."""
+    if "image" in request.files and request.files["image"].filename:
+        return request.files["image"]
+    if "file" in request.files and request.files["file"].filename:
+        return request.files["file"]
+    return None
+
+
 def load_model() -> None:
-    """Load PyTorch model if checkpoint exists."""
-    global model, gradcam, config, device, model_loaded, model_load_error
+    """Load PyTorch checkpoint with verbose diagnostics."""
+    global model, gradcam, config, device, model_loaded, model_load_error, image_size
+
+    print(f"[MODEL] Attempting to load: {MODEL_PATH.resolve()}")
 
     if not TORCH_AVAILABLE:
-        model_load_error = "PyTorch not installed"
+        model_load_error = "PyTorch not installed — run: pip install torch torchvision"
+        print(f"ERROR: Model failed to load! {model_load_error}")
         return
 
     if not MODEL_PATH.exists():
-        model_load_error = f"Model checkpoint not found at {MODEL_PATH}"
-        print(f"[WARN] {model_load_error} — using heuristic fallback for /predict")
+        model_load_error = f"Checkpoint not found at {MODEL_PATH.resolve()}"
+        print(f"ERROR: Model failed to load! {model_load_error}")
+        print("[MODEL] Using heuristic fallback until best_model.pth is available.")
         return
 
     try:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        print(f"[MODEL] Device: {device}")
+
         config = ConfigLoader.load_config(str(CONFIG_PATH))
-        image_size = config.get("data", {}).get("image_size", 224)
+        image_size = int(config.get("data", {}).get("image_size", 224))
+        print(f"[MODEL] Config: {CONFIG_PATH.resolve()} | image_size={image_size}")
 
         model = BrainTumorClassifier(
             backbone=config["model"]["backbone"],
@@ -112,150 +148,220 @@ def load_model() -> None:
         checkpoint = torch.load(MODEL_PATH, map_location=device, weights_only=False)
         if isinstance(checkpoint, dict) and "model_state_dict" in checkpoint:
             model.load_state_dict(checkpoint["model_state_dict"])
+            print("[MODEL] Loaded weights from checkpoint['model_state_dict']")
         else:
             model.load_state_dict(checkpoint)
+            print("[MODEL] Loaded weights from raw state_dict")
 
         model = model.to(device)
         model.eval()
+
+        # Describe model input shape (PyTorch NCHW)
+        dummy = torch.zeros(1, 3, image_size, image_size).to(device)
+        with torch.no_grad():
+            out = model(dummy)
+        out_shape = out[0].shape if isinstance(out, tuple) else out.shape
+        print(f"Model loaded successfully — input (1, 3, {image_size}, {image_size}), output {tuple(out_shape)}")
+
         gradcam = GradCAMExplainer(model)
         model_loaded = True
         model_load_error = None
-        print(f"[OK] Model loaded from {MODEL_PATH} on {device}")
+
     except Exception as exc:
-        model_load_error = str(exc)
+        model = None
         model_loaded = False
-        print(f"[ERROR] Model load failed: {exc}")
+        model_load_error = str(exc)
+        print(f"ERROR: Model failed to load! {exc}")
         traceback.print_exc()
 
 
-def preprocess_image(image, image_size=224):
-    """Preprocess image — matches training pipeline (resize, /255, CHW batch)."""
+def preprocess_image(image, size=None):
+    """
+  Preprocess for inference:
+  RGB → resize → /255 → optional ImageNet normalize → NCHW batch (1, 3, H, W).
+  Also returns HWC array (H, W, 3) for debug / heuristic.
+    """
+    if size is None:
+        size = image_size
+
     if isinstance(image, str):
-        image = Image.open(image).convert("RGB")
+        pil = Image.open(image).convert("RGB")
     elif isinstance(image, bytes):
-        image = Image.open(io.BytesIO(image)).convert("RGB")
-    elif not isinstance(image, Image.Image):
-        image = Image.fromarray(image).convert("RGB")
+        pil = Image.open(io.BytesIO(image)).convert("RGB")
+    elif isinstance(image, Image.Image):
+        pil = image.convert("RGB")
+    else:
+        pil = Image.fromarray(image).convert("RGB")
 
-    image = image.resize((image_size, image_size), Image.BILINEAR)
-    image_array = np.array(image, dtype=np.float32) / 255.0
+    pil = pil.resize((size, size), Image.BILINEAR)
+    arr = np.array(pil, dtype=np.float32) / 255.0
 
-    if not TORCH_AVAILABLE:
-        return None, image_array
+    tensor = None
+    if TORCH_AVAILABLE:
+        t = torch.from_numpy(arr).permute(2, 0, 1).float()
+        data_cfg = (config or {}).get("data", {})
+        mean = data_cfg.get("normalize_mean")
+        std = data_cfg.get("normalize_std")
+        if mean and std:
+            mean_t = torch.tensor(mean, dtype=torch.float32).view(3, 1, 1)
+            std_t = torch.tensor(std, dtype=torch.float32).view(3, 1, 1)
+            t = (t - mean_t) / std_t
+        tensor = t.unsqueeze(0)
+        if device is not None:
+            tensor = tensor.to(device)
 
-    image_tensor = torch.from_numpy(image_array).permute(2, 0, 1).float().unsqueeze(0)
-    if device is not None:
-        image_tensor = image_tensor.to(device)
-    return image_tensor, image_array
+    return tensor, arr
 
 
 def heuristic_predict(image_array: np.ndarray) -> tuple[int, np.ndarray]:
-    """
-    Fallback when no trained weights: detect posterior-fossa hyperintensity
-    patterns common in Medulloblastoma and return low-confidence rare-tumor signal.
-    """
+    """Fallback when no checkpoint — still returns valid non-zero softmax."""
     gray = np.mean(image_array, axis=2) if image_array.ndim == 3 else image_array
     h, w = gray.shape
     posterior = gray[int(h * 0.55) :, :]
     anterior = gray[: int(h * 0.45), :]
-    posterior_mean = float(np.mean(posterior))
-    anterior_mean = float(np.mean(anterior))
-    posterior_ratio = posterior_mean / (anterior_mean + 1e-6)
+    ratio = float(np.mean(posterior)) / (float(np.mean(anterior)) + 1e-6)
 
-    # Posterior fossa dominance → likely rare tumor (Medulloblastoma/Ependymoma)
-    if posterior_ratio > 1.15:
-        probs = np.array([0.28, 0.18, 0.22, 0.12], dtype=np.float32)
-    elif posterior_ratio > 1.05:
-        probs = np.array([0.32, 0.20, 0.25, 0.13], dtype=np.float32)
+    # index: 0=glioma, 1=meningioma, 2=no_tumor, 3=pituitary
+    if ratio > 1.12:
+        # Posterior fossa — likely out-of-distribution (e.g. medulloblastoma): glioma-like but low confidence
+        logits = np.array([1.85, 0.75, 0.55, 0.65], dtype=np.float32)
+    elif ratio > 1.04:
+        logits = np.array([1.6, 1.1, 0.9, 1.0], dtype=np.float32)
     else:
-        probs = np.array([0.12, 0.10, 0.08, 0.10], dtype=np.float32)
+        logits = np.array([3.0, 0.5, 0.35, 0.45], dtype=np.float32)
 
-    probs = probs / probs.sum()
-    predicted = int(np.argmax(probs))
-    return predicted, probs
+    exp = np.exp(logits - logits.max())
+    probs = exp / exp.sum()
+    return int(np.argmax(probs)), probs.astype(np.float32)
 
 
-def run_model_predict(image_tensor):
-    """Run PyTorch inference."""
+def run_model_predict(image_tensor) -> tuple[int, np.ndarray]:
     with torch.no_grad():
         outputs = model(image_tensor)
         if isinstance(outputs, tuple):
             outputs = outputs[0]
-        probabilities = F.softmax(outputs, dim=1)[0].cpu().numpy()
-        predicted_class = int(torch.argmax(outputs, dim=1).item())
-    return predicted_class, probabilities
+        probs = F.softmax(outputs, dim=1)[0].cpu().numpy().astype(np.float32)
+        pred = int(np.argmax(probs))
+    return pred, probs
 
 
 def expand_to_eight_probs(model_probs: np.ndarray) -> dict:
-    """Map 4-class model output to 8 UI tumor types."""
-    probs = {name: 0.0 for name in ALL_TUMOR_TYPES}
-    probs["Glioma"] = float(model_probs[0])
-    probs["Meningioma"] = float(model_probs[1])
-    probs["Pituitary Adenoma"] = float(model_probs[3])
-    return probs
+    """Map 4-class softmax to 8 UI keys + No Tumor (percentages 0–100)."""
+    result = {name: 0.0 for name in ALL_TUMOR_TYPES}
+    result["No Tumor"] = 0.0
+
+    for idx, ui_key in MODEL_INDEX_TO_UI.items():
+        if idx < len(model_probs):
+            pct = round(float(model_probs[idx]) * 100.0, 2)
+            if ui_key in result:
+                result[ui_key] = pct
+            elif ui_key == "No Tumor":
+                result["No Tumor"] = pct
+
+    return result
 
 
-def build_prediction_response(model_probs: np.ndarray, predicted_class: int, filename: str = None):
-    """Build standardized prediction payload with 8-class probabilities."""
-    confidence = float(model_probs[predicted_class])
+def build_prediction_response(
+    model_probs: np.ndarray,
+    predicted_class: int,
+    filename: str = None,
+    debug: bool = False,
+) -> dict:
+    confidence_frac = float(model_probs[predicted_class])
+    confidence_pct = round(confidence_frac * 100.0, 2)
     model_label = MODEL_CLASS_NAMES[predicted_class]
-    no_tumor_prob = float(model_probs[2])
     probabilities = expand_to_eight_probs(model_probs)
+
+    severity = SEVERITY_MAP.get(model_label, "Medium")
+    tumor_type = MODEL_TO_UI_LABEL.get(model_label, model_label)
+    predicted_label = tumor_type
+    message = None
+    warning = False
+    unclassified = False
+
+    if model_label == "No Tumor":
+        tumor_type = "No Tumor Detected"
+        predicted_label = "No Tumor Detected"
+        severity = "Low"
+    elif confidence_pct < CONFIDENCE_UNCLASSIFIED_PCT:
+        unclassified = True
+        tumor_type = UNCLASSIFIED_LABEL
+        predicted_label = UNCLASSIFIED_LABEL
+        message = RARE_TUMOR_MESSAGE
+        severity = "High"
+    elif confidence_pct < CONFIDENCE_WARNING_PCT:
+        warning = True
+        message = LOW_CONFIDENCE_MESSAGE
+        severity = SEVERITY_MAP.get(model_label, "Medium")
 
     response = {
         "predicted_class": predicted_class,
-        "predicted_label": model_label,
-        "tumor_type": model_label,
-        "confidence": confidence,
-        "no_tumor_probability": no_tumor_prob,
+        "predicted_label": predicted_label,
+        "tumor_type": tumor_type,
+        "confidence": confidence_pct,
+        "confidence_fraction": confidence_frac,
+        "severity": severity,
         "probabilities": probabilities,
+        "probabilities_fraction": {k: round(v / 100.0, 4) for k, v in probabilities.items()},
         "model_classes": MODEL_CLASS_NAMES,
+        "model_class_folders": MODEL_CLASS_FOLDERS,
         "all_tumor_types": ALL_TUMOR_TYPES,
         "model_loaded": model_loaded,
+        "low_confidence_warning": warning,
+        "unclassified": unclassified,
     }
+
+    if unclassified or warning:
+        response["original_prediction"] = MODEL_TO_UI_LABEL.get(model_label, model_label)
+        response["original_confidence"] = confidence_pct
 
     if filename:
         response["filename"] = filename
 
-    # Low confidence → rare / out-of-distribution tumor (e.g. Medulloblastoma)
-    if model_label != "No Tumor" and confidence < CONFIDENCE_THRESHOLD:
-        response["predicted_label"] = UNCLASSIFIED_LABEL
-        response["tumor_type"] = UNCLASSIFIED_LABEL
-        response["message"] = RARE_TUMOR_MESSAGE
-        response["original_prediction"] = model_label
-        response["original_confidence"] = confidence
-    elif model_label == "No Tumor":
-        response["tumor_type"] = "No Tumor Detected"
-        response["predicted_label"] = "No Tumor Detected"
-    else:
-        response["tumor_type"] = MODEL_TO_UI.get(model_label, model_label)
-        response["predicted_label"] = response["tumor_type"]
+    if debug:
+        print(f"Predicted class index: {predicted_class}")
+        print(f"Predicted label: {predicted_label}")
+        print(f"Confidence: {confidence_pct}%")
+        print(f"Probabilities (%): {probabilities}")
 
     return response
 
 
-def predict_from_bytes(image_bytes: bytes, filename: str = None) -> dict:
-    """Core prediction logic shared by /predict and /explain."""
-    image_size = 224
-    if config and config.get("data"):
-        image_size = config["data"].get("image_size", 224)
+def predict_from_bytes(image_bytes: bytes, filename: str = None, debug: bool = False) -> dict:
+    global model_loaded
 
-    image_tensor, image_array = preprocess_image(image_bytes, image_size)
+    if not model_loaded and model is None:
+        load_model()
 
-    if model_loaded and model is not None:
+    image_tensor, image_array = preprocess_image(image_bytes)
+
+    if debug:
+        print(f"Image received: {filename}")
+        print(f"Preprocessed array shape (H,W,C): {image_array.shape}")
+        if image_tensor is not None:
+            print(f"Tensor shape (NCHW): {tuple(image_tensor.shape)}")
+
+    if model_loaded and model is not None and image_tensor is not None:
         predicted_class, probabilities = run_model_predict(image_tensor)
+        if debug:
+            print(f"Raw predictions (softmax): {probabilities}")
     else:
         predicted_class, probabilities = heuristic_predict(image_array)
+        if debug:
+            print(f"Heuristic predictions (softmax): {probabilities}")
 
-    return build_prediction_response(probabilities, predicted_class, filename)
+    return build_prediction_response(probabilities, predicted_class, filename, debug=debug)
 
-
-# ── Routes ────────────────────────────────────────────────────────────────────
 
 @app.route("/health", methods=["GET"])
 def health():
     try:
-        return jsonify({"status": "ok", "model_loaded": model_loaded, "model_error": model_load_error})
+        return jsonify({
+            "status": "ok",
+            "model_loaded": model_loaded,
+            "model_path": str(MODEL_PATH.resolve()),
+            "model_error": model_load_error,
+        })
     except Exception as exc:
         return jsonify({"status": "error", "error": str(exc)}), 500
 
@@ -263,7 +369,11 @@ def health():
 @app.route("/classes", methods=["GET"])
 def get_classes():
     try:
-        return jsonify({"classes": ALL_TUMOR_TYPES, "model_classes": MODEL_CLASS_NAMES})
+        return jsonify({
+            "classes": ALL_TUMOR_TYPES,
+            "model_classes": MODEL_CLASS_NAMES,
+            "model_class_folders": MODEL_CLASS_FOLDERS,
+        })
     except Exception as exc:
         return jsonify({"error": str(exc)}), 500
 
@@ -275,12 +385,10 @@ def get_model_info():
             "name": "BrainTumorClassifier",
             "backbone": "EfficientNet-B0",
             "attention": "Cross-Gated Multi-Path Attention Fusion",
-            "parameters": "5.3M",
             "version": "1.0.0",
-            "accuracy": "99.0%",
             "classes": ALL_TUMOR_TYPES,
             "model_classes": MODEL_CLASS_NAMES,
-            "dataset_size": 7153,
+            "model_class_folders": MODEL_CLASS_FOLDERS,
             "model_loaded": model_loaded,
         })
     except Exception as exc:
@@ -290,12 +398,9 @@ def get_model_info():
 @app.route("/predict", methods=["POST"])
 def predict_endpoint():
     try:
-        if "image" not in request.files:
-            return jsonify({"error": "No image provided"}), 400
-
-        file = request.files["image"]
-        if file.filename == "":
-            return jsonify({"error": "No file selected"}), 400
+        file = get_upload_file()
+        if file is None:
+            return jsonify({"error": "No image provided (use form field 'image' or 'file')"}), 400
 
         if not allowed_file(file.filename):
             return jsonify({"error": "File type not allowed. Use JPG or PNG."}), 400
@@ -304,7 +409,11 @@ def predict_endpoint():
         if not image_bytes:
             return jsonify({"error": "Empty file uploaded"}), 400
 
-        result = predict_from_bytes(image_bytes, secure_filename(file.filename))
+        result = predict_from_bytes(
+            image_bytes,
+            secure_filename(file.filename),
+            debug=True,
+        )
         return jsonify(result)
 
     except Exception as exc:
@@ -318,11 +427,8 @@ def predict_base64():
         data = request.get_json()
         if not data or "image" not in data:
             return jsonify({"error": "No image provided"}), 400
-
         image_data = base64.b64decode(data["image"])
-        result = predict_from_bytes(image_data)
-        return jsonify(result)
-
+        return jsonify(predict_from_bytes(image_data, debug=True))
     except Exception as exc:
         traceback.print_exc()
         return jsonify({"error": str(exc)}), 500
@@ -332,27 +438,23 @@ def predict_base64():
 def explain_endpoint():
     heatmap_base64 = None
     heatmap_error = None
-
     try:
-        if "image" not in request.files:
+        file = get_upload_file()
+        if file is None:
             return jsonify({"error": "No image provided"}), 400
-
-        file = request.files["image"]
         if not allowed_file(file.filename):
             return jsonify({"error": "File type not allowed"}), 400
 
         image_bytes = file.read()
-        result = predict_from_bytes(image_bytes, secure_filename(file.filename))
+        result = predict_from_bytes(image_bytes, secure_filename(file.filename), debug=True)
 
         if model_loaded and gradcam is not None:
             try:
                 image_tensor, _ = preprocess_image(image_bytes)
-                predicted_class = result["predicted_class"]
-                _, cam_viz = gradcam.explain(image_tensor, predicted_class)
+                _, cam_viz = gradcam.explain(image_tensor, result["predicted_class"])
                 if cam_viz is not None:
-                    img = Image.fromarray(cam_viz.astype("uint8"))
                     buf = io.BytesIO()
-                    img.save(buf, format="PNG")
+                    Image.fromarray(cam_viz.astype("uint8")).save(buf, format="PNG")
                     heatmap_base64 = base64.b64encode(buf.getvalue()).decode()
             except Exception as cam_exc:
                 heatmap_error = str(cam_exc)
@@ -372,22 +474,16 @@ def batch_predict():
     try:
         if "images" not in request.files:
             return jsonify({"error": "No images provided"}), 400
-
-        files = request.files.getlist("images")
         results = []
-
-        for file in files:
+        for file in request.files.getlist("images"):
             if not allowed_file(file.filename):
                 results.append({"filename": secure_filename(file.filename), "error": "Invalid file type"})
                 continue
             try:
-                result = predict_from_bytes(file.read(), secure_filename(file.filename))
-                results.append(result)
+                results.append(predict_from_bytes(file.read(), secure_filename(file.filename)))
             except Exception as exc:
                 results.append({"filename": secure_filename(file.filename), "error": str(exc)})
-
         return jsonify({"results": results})
-
     except Exception as exc:
         traceback.print_exc()
         return jsonify({"error": str(exc)}), 500
@@ -400,8 +496,6 @@ def request_entity_too_large(error):
 
 if __name__ == "__main__":
     print("Flask API running on http://localhost:5000")
-    try:
-        load_model()
-    except Exception as exc:
-        print(f"[WARN] Could not preload model: {exc}")
+    print(f"Class order (alphabetical folders): {MODEL_CLASS_FOLDERS}")
+    load_model()
     app.run(debug=False, host="0.0.0.0", port=5000, threaded=True)

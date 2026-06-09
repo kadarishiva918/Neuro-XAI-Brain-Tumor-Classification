@@ -2,8 +2,6 @@
 @tailwind components;
 @tailwind utilities;
 
-@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Plus+Jakarta+Sans:wght@600;700;800&display=swap");
-
 :root {
   --font-inter: "Inter", system-ui, sans-serif;
   --font-jakarta: "Plus Jakarta Sans", system-ui, sans-serif;
@@ -12,6 +10,7 @@
   --bg-primary: #050b1a;
   --bg-card: #0e1830;
   --bg-elevated: #111d3a;
+  --sidebar-bg: #0d1117;
   --accent-blue: #4cc9f0;
   --accent-violet: #7b61ff;
   --accent-cyan: #00d4ff;
@@ -33,7 +32,7 @@
 
 @layer base {
   * {
-    @apply border-border;
+    border-color: var(--border-color);
   }
 
   html {
@@ -41,27 +40,32 @@
   }
 
   body {
-    @apply bg-bg-primary text-text-primary font-sans antialiased;
+    background-color: var(--bg-primary);
+    color: var(--text-primary);
+    font-family: var(--font-inter), system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
     transition: background-color 300ms ease, color 300ms ease;
   }
 }
 
 @layer components {
   .glass-card {
-    @apply rounded-xl border backdrop-blur-glass shadow-glow;
+    @apply rounded-xl border shadow-glow backdrop-blur-glass;
     border-color: var(--border-color);
-    background-color: color-mix(in srgb, var(--bg-card) 80%, transparent);
+    background-color: rgba(14, 24, 48, 0.85);
   }
 
   .glass-elevated {
     @apply rounded-xl border backdrop-blur-glass;
     border-color: var(--border-color);
-    background-color: color-mix(in srgb, var(--bg-elevated) 90%, transparent);
+    background-color: rgba(17, 29, 58, 0.9);
   }
 
   .neon-border-active {
     border-left: 3px solid var(--accent-cyan);
     background: linear-gradient(90deg, rgba(76, 201, 240, 0.12) 0%, transparent 100%);
+    color: var(--text-primary);
   }
 
   .gradient-mesh {
@@ -82,7 +86,8 @@
   }
 
   .btn-primary {
-    @apply inline-flex items-center justify-center gap-2 rounded-lg px-5 py-2.5 font-semibold text-bg-primary transition-all duration-200;
+    @apply inline-flex items-center justify-center gap-2 rounded-lg px-5 py-2.5 font-semibold transition-all duration-200;
+    color: #050b1a;
     background: linear-gradient(135deg, var(--accent-blue), var(--accent-violet));
     box-shadow: 0 0 24px rgba(76, 201, 240, 0.35);
   }
@@ -93,19 +98,25 @@
   }
 
   .btn-primary:focus-visible {
-    @apply outline-none ring-2 ring-accent-blue ring-offset-2 ring-offset-bg-primary;
+    outline: none;
+    box-shadow: 0 0 0 2px var(--bg-primary), 0 0 0 4px var(--accent-blue);
   }
 
   .btn-secondary {
-    @apply inline-flex items-center justify-center gap-2 rounded-lg border border-border bg-bg-elevated px-4 py-2 text-sm font-medium text-text-primary transition-all hover:shadow-glow focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-blue;
+    @apply inline-flex items-center justify-center gap-2 rounded-lg border px-4 py-2 text-sm font-medium transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-blue;
+    border-color: var(--border-color);
+    background-color: var(--bg-elevated);
+    color: var(--text-primary);
   }
 
   .btn-secondary:hover {
     border-color: rgba(76, 201, 240, 0.4);
+    box-shadow: 0 0 30px rgba(76, 201, 240, 0.15);
   }
 
   .badge-glioma {
-    @apply rounded-full px-2.5 py-0.5 text-xs font-semibold uppercase tracking-wide text-accent-rose;
+    @apply rounded-full px-2.5 py-0.5 text-xs font-semibold uppercase tracking-wide;
+    color: #ff4d6d;
     background-color: rgba(255, 77, 109, 0.2);
   }
 
@@ -120,21 +131,43 @@
   }
 
   .badge-normal {
-    @apply rounded-full px-2.5 py-0.5 text-xs font-semibold uppercase tracking-wide text-accent-emerald;
+    @apply rounded-full px-2.5 py-0.5 text-xs font-semibold uppercase tracking-wide;
+    color: #00f5a0;
     background-color: rgba(0, 245, 160, 0.2);
   }
 
   .input-field {
-    @apply w-full rounded-lg border border-border bg-bg-elevated px-4 py-2.5 text-sm text-text-primary placeholder:text-text-muted transition-colors focus:outline-none focus:ring-2;
+    @apply w-full rounded-lg border px-4 py-2.5 text-sm transition-colors focus:outline-none focus:ring-2;
+    border-color: var(--border-color);
+    background-color: var(--bg-elevated);
+    color: var(--text-primary);
+  }
+
+  .input-field::placeholder {
+    color: var(--text-muted);
   }
 
   .input-field:focus {
     border-color: rgba(76, 201, 240, 0.5);
     --tw-ring-color: rgba(76, 201, 240, 0.3);
   }
+
+  .sidebar-shell {
+    background-color: var(--sidebar-bg);
+    border-right: 1px solid var(--border-color);
+  }
 }
 
-/* Scrollbar */
+@keyframes gradient-shift {
+  0%,
+  100% {
+    background-position: 0% 50%;
+  }
+  50% {
+    background-position: 100% 50%;
+  }
+}
+
 ::-webkit-scrollbar {
   width: 8px;
   height: 8px;

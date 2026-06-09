@@ -26,11 +26,12 @@ export interface PredictionResult {
   predicted_label: DisplayLabel;
   tumor_type?: DisplayLabel;
   confidence: number;
+  severity?: Severity;
   no_tumor_probability?: number;
   message?: string;
   original_prediction?: string;
   original_confidence?: number;
-  probabilities: Record<TumorClass, number>;
+  probabilities: Record<TumorClass, number> & { "No Tumor"?: number };
   model_loaded?: boolean;
 }
 

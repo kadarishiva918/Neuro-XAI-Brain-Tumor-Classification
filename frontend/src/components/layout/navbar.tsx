@@ -1,8 +1,9 @@
 "use client";
 
-import { Menu, Bell, ChevronRight } from "lucide-react";
+import { Menu, Bell, ChevronRight, LogOut } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useAuth } from "@/context/auth-context";
 
 const routeLabels: Record<string, string> = {
   "/": "Dashboard",
@@ -23,6 +24,7 @@ interface NavbarProps {
 
 export function Navbar({ onMenuClick }: NavbarProps) {
   const pathname = usePathname();
+  const { user, logout } = useAuth();
   const segments = pathname.split("/").filter(Boolean);
   const crumbs = [
     { label: "Neuro-XAI", href: "/" },
@@ -72,15 +74,28 @@ export function Navbar({ onMenuClick }: NavbarProps) {
             <Bell className="h-5 w-5" />
             <span className="absolute right-1.5 top-1.5 h-2 w-2 rounded-full bg-accent-rose" />
           </button>
-          <div className="flex items-center gap-3 rounded-lg border border-border bg-bg-card px-3 py-1.5">
-            <div className="flex h-8 w-8 items-center justify-center rounded-full bg-gradient-to-br from-accent-blue to-accent-violet text-xs font-bold text-bg-primary">
-              DR
+          {user && (
+            <div className="flex items-center gap-2">
+              <div className="flex items-center gap-3 rounded-lg border border-border bg-bg-card px-3 py-1.5">
+                <div className="flex h-8 w-8 items-center justify-center rounded-full bg-gradient-to-br from-accent-cyan to-accent-blue text-xs font-bold text-bg-primary">
+                  {user.initials || "?"}
+                </div>
+                <div className="hidden sm:block">
+                  <p className="text-sm font-medium">{user.name}</p>
+                  <p className="text-xs text-text-muted">{user.specialization}</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={logout}
+                className="rounded-lg p-2 text-text-muted transition-colors hover:bg-accent-rose/10 hover:text-accent-rose"
+                title="Logout"
+                aria-label="Logout"
+              >
+                <LogOut className="h-4 w-4" />
+              </button>
             </div>
-            <div className="hidden sm:block">
-              <p className="text-sm font-medium">Dr. Sharma</p>
-              <p className="text-xs text-text-muted">Neuroradiology</p>
-            </div>
-          </div>
+          )}
         </div>
       </div>
     </header>
